@@ -1,0 +1,201 @@
+name: lw.Web2Harmony CI
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+env:
+  PRODUCT_VERSION: '0.1.0'
+jobs:
+  desktop:
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate versions and PowerShell
+        shell: pwsh
+        run: |
+          $lock=Get-Content -Raw toolchain.lock.json|ConvertFrom-Json
+          if ($lock.productVersion -ne $env:PRODUCT_VERSION) { throw 'Product version mismatch' }
+          if (-not (Get-Content -Raw CMakeLists.txt).Contains("VERSION $env:PRODUCT_VERSION ")) { throw 'CMake version mismatch' }
+          Get-ChildItem tools -Filter '*.ps1' | ForEach-Object {
+            $tokens=$null; $errors=$null
+            [Management.Automation.Language.Parser]::ParseFile($_.FullName,[ref]$tokens,[ref]$errors)|Out-Null
+            if ($errors) { throw ($errors.Message -join '; ') }
+          }
+      - uses: actions/cache@v4
+        with:
+          path: .deps/spdlog.tar.gz
+          key: spdlog-1.17.0-d8862955
+      - name: Download and verify pinned spdlog source
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force .deps | Out-Null
+          if (-not (Test-Path .deps/spdlog.tar.gz)) {
+            curl.exe -L --fail --retry 3 -o .deps/spdlog.tar.gz https://github.com/gabime/spdlog/archive/refs/tags/v1.17.0.tar.gz
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+          if ((Get-FileHash .deps/spdlog.tar.gz -Algorithm SHA256).Hash.ToLowerInvariant() -ne 'd8862955c6d74e5846b3f580b1605d2428b11d97a410d86e2fb13e857cd3a744') { throw 'spdlog SHA256 mismatch' }
+      - name: Build and test Windows tools
+        shell: pwsh
+        run: |
+          cmake -S . -B build -A x64 -DBUILD_TESTING=ON
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cmake --build build --config Release --parallel
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          ctest --test-dir build -C Release --output-on-failure
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          ./build/Release/lw.Web2Harmony.exe export samples/hello/project.json build/generated/hello
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          ./build/Release/lw.Web2Harmony.exe export samples/remote/project.json build/generated/remote
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Stage desktop tools and exported test projects
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force build/desktop-stage/bin | Out-Null
+          Copy-Item build/Release/lw.Web2Harmony*.exe build/desktop-stage/bin
+          Copy-Item assets,runtime-template,samples,tools,docs,third_party build/desktop-stage -Recurse
+          Copy-Item README.md,README_EN.md,LICENSE,THIRD-PARTY-NOTICES.md,toolchain.lock.json build/desktop-stage
+          Copy-Item build/generated build/desktop-stage -Recurse
+      - uses: actions/upload-artifact@v4
+        with:
+          name: desktop-and-projects
+          path: build/desktop-stage/
+          if-no-files-found: error
+  hap:
+    if: github.event_name != 'pull_request'
+    needs: desktop
+    runs-on: windows-latest
+    timeout-minutes: 45
+    env:
+      CLT_URL: ${{ vars.HARMONY_CLT_URL }}
+      CLT_SHA256: ${{ vars.HARMONY_CLT_SHA256 }}
+      LICENSE_ACCEPTED: ${{ vars.HARMONY_SDK_LICENSE_ACCEPTED }}
+      STORE_PASSWORD: ${{ secrets.HARMONY_STORE_PASSWORD }}
+      KEY_PASSWORD: ${{ secrets.HARMONY_KEY_PASSWORD }}
+      STORE_B64: ${{ secrets.HARMONY_P12_BASE64 }}
+      CERT_B64: ${{ secrets.HARMONY_CERT_BASE64 }}
+      PROFILE_B64: ${{ secrets.HARMONY_PROFILE_BASE64 }}
+      KEY_ALIAS: ${{ secrets.HARMONY_KEY_ALIAS }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: desktop-and-projects
+          path: build/desktop
+      - name: Require official toolchain configuration
+        shell: pwsh
+        run: |
+          if ($env:LICENSE_ACCEPTED -ne 'true') { throw 'Set HARMONY_SDK_LICENSE_ACCEPTED=true only after accepting the Huawei toolchain license. See docs/CI.md.' }
+          if ($env:CLT_URL -notmatch '^https://' -or $env:CLT_SHA256 -notmatch '^[a-fA-F0-9]{64}$') {
+            throw 'Configure HARMONY_CLT_URL and HARMONY_CLT_SHA256 from the matching official Command Line Tools download. HAP builds are required; project export alone is not a successful build.'
+          }
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: actions/cache@v4
+        with:
+          path: build/downloads/command-line-tools.zip
+          key: harmony-clt-windows-${{ vars.HARMONY_CLT_SHA256 }}
+      - name: Import SHA256-verified official toolchain
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force build/downloads | Out-Null
+          $archive='build/downloads/command-line-tools.zip'
+          if (-not (Test-Path $archive)) {
+            curl.exe --proto '=https' --proto-redir '=https' -L --fail --retry 3 -o $archive $env:CLT_URL
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+          ./tools/install-toolchain.ps1 -Archive $archive -Sha256 $env:CLT_SHA256 -AcceptHuaweiLicense
+      - name: Prepare optional device-specific debug signing
+        id: signing
+        shell: pwsh
+        run: |
+          $values=@($env:STORE_B64,$env:CERT_B64,$env:PROFILE_B64,$env:KEY_ALIAS,$env:STORE_PASSWORD,$env:KEY_PASSWORD)
+          $present=@($values|Where-Object {-not [string]::IsNullOrWhiteSpace($_)}).Count
+          if ($present -eq 0) { 'enabled=false' >> $env:GITHUB_OUTPUT; Write-Host 'Building unsigned HAPs; configure signing secrets for device installation.'; exit 0 }
+          if ($present -ne 6) { throw 'Signing secrets are incomplete; configure all six secrets or remove all of them.' }
+          $directory=Join-Path $env:RUNNER_TEMP 'harmony-signing'
+          New-Item -ItemType Directory -Force $directory|Out-Null
+          [IO.File]::WriteAllBytes("$directory/developer.p12",[Convert]::FromBase64String($env:STORE_B64))
+          [IO.File]::WriteAllBytes("$directory/debug.cer",[Convert]::FromBase64String($env:CERT_B64))
+          [IO.File]::WriteAllBytes("$directory/debug.p7b",[Convert]::FromBase64String($env:PROFILE_B64))
+          $config=@{bundleName='com.lw.samples.harmonyhello';storeFile='developer.p12';keyAlias=$env:KEY_ALIAS;certpath='debug.cer';profile='debug.p7b'}
+          [IO.File]::WriteAllText("$directory/signing.local.json",($config|ConvertTo-Json))
+          'enabled=true' >> $env:GITHUB_OUTPUT
+      - name: Compile and inspect local and remote HAPs
+        shell: pwsh
+        run: |
+          $arguments=@{
+            ProjectDirectory='build/desktop/generated/hello'
+            ToolchainDirectory='toolchain/command-line-tools'
+            JavaHome=$env:JAVA_HOME
+          }
+          if ('${{ steps.signing.outputs.enabled }}' -eq 'true') {
+            $env:HARMONY_STORE_PASSWORD=$env:STORE_PASSWORD
+            $env:HARMONY_KEY_PASSWORD=$env:KEY_PASSWORD
+            $arguments.SigningConfiguration=Join-Path $env:RUNNER_TEMP 'harmony-signing/signing.local.json'
+          }
+          ./tools/build-hap.ps1 @arguments
+          ./tools/build-hap.ps1 -ProjectDirectory build/desktop/generated/remote -ToolchainDirectory toolchain/command-line-tools -JavaHome $env:JAVA_HOME
+          New-Item -ItemType Directory -Force build/hap-results/local,build/hap-results/remote|Out-Null
+          Copy-Item build/desktop/generated/hello/dist/* build/hap-results/local
+          Copy-Item build/desktop/generated/remote/dist/* build/hap-results/remote
+      - name: Remove signing materials
+        if: always()
+        shell: pwsh
+        run: |
+          $directory=Join-Path $env:RUNNER_TEMP 'harmony-signing'
+          if (Test-Path -LiteralPath $directory) {
+            $resolved=(Resolve-Path -LiteralPath $directory).Path
+            if ($resolved -ne [IO.Path]::GetFullPath($directory)) { throw 'Unexpected signing cleanup target' }
+            Remove-Item -LiteralPath $resolved -Recurse -Force
+          }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hap-results
+          path: build/hap-results/
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: hap-failure-logs
+          path: logs/*.log*
+          if-no-files-found: warn
+  package:
+    needs: [desktop, hap]
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: desktop-and-projects
+          path: build/desktop
+      - uses: actions/download-artifact@v4
+        with:
+          name: hap-results
+          path: build/demo-haps
+      - name: Package one distribution ZIP
+        shell: pwsh
+        run: |
+          ./tools/package-release.ps1 -BuildDirectory build/desktop/bin -HapDirectory build/demo-haps
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lw-Web2Harmony-v0.1.0-windows-x64
+          path: |
+            build/releases/*.zip
+            build/releases/*.sha256
+          if-no-files-found: error
+      - name: Publish tagged release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: pwsh
+        run: |
+          if ($env:GITHUB_REF_NAME -ne "v$env:PRODUCT_VERSION") { throw 'Tag does not match product version' }
+          gh release create $env:GITHUB_REF_NAME build/releases/*.zip build/releases/*.sha256 --verify-tag --title "lw.Web2Harmony $env:GITHUB_REF_NAME" --notes-file docs/RELEASE-v0.1.0.md
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

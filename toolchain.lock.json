@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "productVersion": "0.1.0",
+  "runtimeVersion": "1",
+  "modelVersion": "6.0.0",
+  "compatibleSdkVersion": "6.0.0(20)",
+  "targetSdkVersion": "6.0.0(20)",
+  "runtimeOS": "HarmonyOS",
+  "note": "Initial SDK baseline; compile using matching official Command Line Tools. HarmonyOS 7 device compatibility requires real-device validation."
+}

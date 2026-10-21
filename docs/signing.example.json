@@ -1,0 +1,7 @@
+{
+  "bundleName": "com.lw.samples.harmonyhello",
+  "storeFile": "developer.p12",
+  "keyAlias": "your-key-alias",
+  "certpath": "debug.cer",
+  "profile": "debug.p7b"
+}

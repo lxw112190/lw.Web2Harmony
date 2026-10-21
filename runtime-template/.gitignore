@@ -1,0 +1,8 @@
+.hvigor/
+oh_modules/
+build/
+entry/build/
+local.properties
+signing/
+signing.local.json
+.lw-signing-profile-backup

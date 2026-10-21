@@ -1,0 +1,12 @@
+export class AppConfig {
+  static readonly name: string = {{APP_NAME}};
+  static readonly bundleName: string = {{BUNDLE_NAME}};
+  static readonly version: string = {{VERSION_NAME}};
+  static readonly runtimeVersion: string = '1';
+  static readonly mode: string = {{MODE}};
+  static readonly startUrl: string = {{START_URL}};
+  static readonly allowHttp: boolean = {{ALLOW_HTTP}};
+  static readonly fullscreen: boolean = {{FULLSCREEN}};
+  static readonly orientation: string = {{ORIENTATION}};
+  static readonly origin: string = 'https://web2harmony.invalid';
+}

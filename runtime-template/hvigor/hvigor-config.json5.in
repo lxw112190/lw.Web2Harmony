@@ -1,0 +1,6 @@
+{
+  "modelVersion": {{MODEL_VERSION}},
+  "dependencies": {},
+  "execution": { "daemon": false },
+  "logging": { "level": "info" }
+}

@@ -1,0 +1,13 @@
+{
+  "app": {
+    "signingConfigs": [],
+    "products": [{
+      "name": "default",
+      "compatibleSdkVersion": {{MIN_SDK}},
+      "targetSdkVersion": {{TARGET_SDK}},
+      "runtimeOS": "HarmonyOS"
+    }],
+    "buildModeSet": [{"name":"debug"},{"name":"release"}]
+  },
+  "modules": [{"name":"entry","srcPath":"./entry","targets":[{"name":"default","applyToProducts":["default"]}]}]
+}
