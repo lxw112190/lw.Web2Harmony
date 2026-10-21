@@ -1,65 +1,41 @@
-# CI 与真机测试
+# CI：Windows 打包器验证与发布
 
-本项目支持本地直接编译 HAP，再用 Mate 80 Pro 真机验证；GitHub Actions 保留用于自动验证与发布。本地构建不需要先配置 CI，见 [LOCAL-BUILD.md](LOCAL-BUILD.md)。
+CI 不再下载鸿蒙工具链、不编译 HAP、不读取真实签名材料。HAP 在本机用应用目录内的工具链构建，再用真机验证，见 [LOCAL-BUILD.md](LOCAL-BUILD.md)。
 
-## 一次性配置
+## CI 做什么
 
-使用已核对的 Windows Command Line Tools 26.0.0.851（modelVersion 26.0.0、SDK API 26、JDK 21）。最低兼容版本保留 6.0.0(20)，目标为 26.0.0。HarmonyOS 7.0 是手机系统版本，不能直接作为 SDK API Level。
+`desktop` 任务使用只读仓库权限：
 
-在 GitHub 仓库 Settings → Secrets and variables → Actions → Variables 添加：
+1. 检查产品版本、CMake 版本及 PowerShell 脚本语法。
+2. 校验/缓存 spdlog，编译 Windows C++ GUI、CLI。
+3. 运行工程导出、Unicode 资源、日志轮转、GUI、DPAPI 凭据和模块路径隔离测试。
+4. 用 JDK 21 在临时目录生成测试 P12/CSR，验证 EC-256、公钥匹配、ECDSA 签名、中文主体、密码保密、拒绝覆盖及导入流程，然后删除测试私钥。这不是向华为申请证书，也不产生真机 Profile。
+5. 导出本地/在线样例工程，验证打包器的工程生成能力；不运行 Hvigor。
+6. 生成一个 Windows 发行 ZIP，检查不含 HAP、私钥、证书、Profile 或 SDK，并上传最终 ZIP 与 SHA-256。Artifact 保留 7 天。
 
-| Variable | 内容 |
-| --- | --- |
-| HARMONY_CLT_URL | 配套 Windows x64 官方工具链 ZIP 的 HTTPS 地址；带签名参数时应放在同名 Secret，不放公开配置 |
-| HARMONY_CLT_SHA256 | 可留空使用 toolchain.lock.json；填写时必须与锁定值一致 |
-| HARMONY_SDK_LICENSE_ACCEPTED | 阅读并接受对应华为许可后设为 true |
+JDK 21 仅用于密钥/CSR 回归测试，不代表 CI 又在编译鸿蒙应用。普通只编译 C++ 的本机若没有 JDK，相关集成测试明确不启用；CI 显式提供 JDK，必须运行该项测试。
 
-已核验的 ZIP SHA-256：`ac8d0563f47f95ca78799ea4aa494fa260bc3f7c8f2a569ac629af1794b5d71c`。
+桌面 ZIP 包含 GUI/CLI、`runtime/` 基础工程源码、`packer/templates/`、样例、脚本、文档与校验和。不含预编译 HAP、鸿蒙 SDK/JDK 或个人签名材料。`release.json` 标明 `harmonySdkIncluded=false`、`demoHapsIncluded=false`。
 
-这里不填写未经验证的下载地址。首次 CI 必须配置下载 URL 与许可确认，缺失会明确失败，不能把工程导出成功当作 HAP 编译成功。官网下载链接可能带时效签名，不能承诺长期有效；失效时需在官网下载新的合法地址，更新 Secret。Secret 优先于同名 Variable。每次使用缓存仍校验压缩包 SHA-256。工具链只在构建环境使用，不装进公开发行包。
+## 不再需要配置的变量
 
-## 真机签名
+本工作流不再引用 `HARMONY_CLT_URL`、`HARMONY_CLT_SHA256`、`HARMONY_SDK_LICENSE_ACCEPTED`，也不读取先前配置的 P12/CER/Profile/密码/别名 Secrets。你可以自行移除这些旧配置；本次代码修改不会替你删除 GitHub 上的变量或 Secrets。
 
-未配置签名时 CI 构建未签名 HAP，不能直接用于商业鸿蒙真机安装。
+鸿蒙许可仍适用于你在本地使用官方工具链；CI 不使用它，不等于可以忽略本地许可。
 
-为本地 Demo 的包名 com.lw.samples.harmonyhello 创建应用，申请调试证书、注册设备并申请包含该设备的调试 Profile。通过平台或 DevEco Studio 正常准备材料。添加六项 GitHub Secrets：
+## 发布
 
-- HARMONY_P12_BASE64：密钥库文件的 Base64。
-- HARMONY_CERT_BASE64：调试证书文件的 Base64。
-- HARMONY_PROFILE_BASE64：包含测试设备的调试 Profile 文件的 Base64。
-- HARMONY_KEY_ALIAS：密钥别名。
-- HARMONY_STORE_PASSWORD：密钥库密码。
-- HARMONY_KEY_PASSWORD：私钥密码。
+普通推送与 PR 只执行桌面构建、测试和 Artifact 打包。只有 `push` 的 `v*` 标签才启动独立 `publish` 任务；该任务单独申请仓库写权限，从桌面任务下载最终 ZIP 后创建 GitHub Release。PR 不执行发布任务，也不获得仓库写权限。
 
-PowerShell 生成文件 Base64（输出是敏感材料，仅放入 Secrets）：
+确认本地 HAP 和真机验收通过、版本一致后再创建标签：
 
 ```powershell
-[Convert]::ToBase64String([IO.File]::ReadAllBytes('D:\private\developer.p12'))
+git tag -a v0.1.0 -m 'lw.Web2Harmony v0.1.0'
+git push origin v0.1.0
 ```
 
-六项必须全部配置，否则 CI 拒绝构建，避免误生成未签名包。只对本地 Demo 使用这套身份；在线 Demo 保持未签名，换包名需对应 Profile。
+## 验收边界
 
-密钥不会进入源码或 Artifact，临时签名配置会在构建后恢复，密钥文件由 always 清理步骤移除。不要上传包含密码的 build-profile.json5。
+CI 绿色只说明 Windows 工具、脚本与工程导出回归通过，不能证明 ArkTS/HAP 编译成功，更不能证明华为证书、Profile、手机安装和网页运行已经通过。
 
-## 编译与验收
-
-1. 推送 main，等待 desktop、hap、package 三个任务成功。
-2. 下载唯一最终 ZIP，demo-haps/local 下以 -signed.hap 结尾的文件用于已注册设备。
-3. hdc 连接手机并安装；不要把未签名包改名后当作已签名包。
-4. 在手机验证中文页面、JS 模块、图片、localStorage、返回键及中文路径。
-5. 点击页面顶部“导出诊断日志”，把包含 device-info.log / runtime.log 的诊断文本发回分析。
-
-```powershell
-hdc list targets
-hdc install -r .\com.lw.samples.harmonyhello-signed.hap
-hdc shell aa start -a EntryAbility -b com.lw.samples.harmonyhello
-```
-
-截图设备：HUAWEI Mate 80 Pro，SGT-AL00，HarmonyOS 7.0.0.109 SP6。当前设备的 API Level 由安装后 device-info.log 记录；未做真机验证前不宣称兼容成功。
-
-## 官方参考
-
-- https://developer.huawei.com/consumer/cn/doc/harmonyos-guides/ide-command-line-building-app
-- https://developer.huawei.com/consumer/cn/doc/harmonyos-guides/ide-hvigor-commandline
-- https://developer.huawei.com/consumer/cn/doc/harmonyos-guides/web-page-loading
-- https://developer.huawei.com/consumer/cn/doc/doccenter-getting-started/agc-help-debug-profile-0000002248181278
+本地仍使用 CLT 26.0.0.851 / SDK API 26 / JDK 21：先编译基础 `runtime/`，再按 [SIGNING.md](SIGNING.md) 生成 P12/CSR、申请真实平台材料、导入并签名，在 Mate 80 Pro 上安装测试。未完成真机验证前不宣称设备兼容成功。

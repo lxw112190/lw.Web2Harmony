@@ -24,7 +24,7 @@ foreach ($file in @('LICENSE','README.md','README_EN.md','THIRD-PARTY-NOTICES.md
 }
 if ($HapDirectory) { Copy-Item -LiteralPath $HapDirectory -Destination "$package/demo-haps" -Recurse }
 $utf8=[Text.UTF8Encoding]::new($false)
-$metadata=@{name='lw.Web2Harmony';version=$lock.productVersion;buildTimeUtc=[DateTime]::UtcNow.ToString('o');commit=$env:GITHUB_SHA;harmonySdkIncluded=$false}
+$metadata=@{name='lw.Web2Harmony';version=$lock.productVersion;buildTimeUtc=[DateTime]::UtcNow.ToString('o');commit=$env:GITHUB_SHA;harmonySdkIncluded=$false;demoHapsIncluded=[bool]$HapDirectory}
 [IO.File]::WriteAllText("$package/release.json",($metadata|ConvertTo-Json),$utf8)
 $checks=Get-ChildItem -LiteralPath $package -Recurse -File | Sort-Object FullName | ForEach-Object {
     $relative=$_.FullName.Substring($package.Length+1).Replace('\','/')

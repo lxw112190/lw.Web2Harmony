@@ -59,7 +59,22 @@ toolchain/
 
 建议先为基础工程 Bundle Name `com.lw.web2harmony.runtime` 准备自己的 P12 密钥库、调试证书、包含测试手机的调试 Profile。Android 可本地创建自签身份；商业鸿蒙调试材料不能由工具自行生成后冒充华为授权。可以借助 DevEco Studio 正常自动签名取得材料，或走开发者中心手动申请流程。
 
-首次导入（密码交互输入）：
+没有 P12 时，先本地生成密钥与 CSR（只需要 JDK，不需要鸿蒙 SDK）：
+
+```powershell
+.\tools\create-signing-request.ps1 -BundleName com.lw.web2harmony.runtime -CommonName '天天代码码天天'
+```
+
+只上传 `signing/requests/com.lw.web2harmony.runtime/developer.csr` 到华为申请证书，再取得包含手机的 Profile。P12 和加密密码文件保密。具体流程与备份要求见 [SIGNING.md](SIGNING.md)。
+
+取得平台材料后，可自动复用请求阶段的加密密码导入：
+
+```powershell
+.\tools\configure-signing.ps1 -BundleName com.lw.web2harmony.runtime -RequestDirectory .\signing\requests\com.lw.web2harmony.runtime -Certificate D:\private\debug.cer -Profile D:\private\debug.p7b
+.\tools\build-runtime.ps1
+```
+
+已有 P12 的首次导入（密码交互输入）：
 
 ```powershell
 .\tools\configure-signing.ps1 -BundleName com.lw.web2harmony.runtime -StoreFile D:\private\developer.p12 -Certificate D:\private\debug.cer -Profile D:\private\debug.p7b -KeyAlias your-key-alias
@@ -87,7 +102,7 @@ toolchain/
 .\toolchain\command-line-tools\sdk\default\openharmony\toolchains\hdc.exe shell aa start -a EntryAbility -b com.lw.samples.harmonyhello
 ```
 
-确认页面、中文图片和路径、JS 模块、localStorage、返回键，然后点击页面顶部“导出诊断日志”。未完成真机测试前不宣称设备兼容成功。CI 可随后验证同一份源码，不是本地测试前置条件。
+确认页面、中文图片和路径、JS 模块、localStorage、返回键，然后点击页面顶部“导出诊断日志”。未完成真机测试前不宣称设备兼容成功。CI 只验证 Windows 打包器与工程导出，不再编译 HAP；本地构建和真机验收是独立步骤。
 
 安装基础 Runtime 时，将启动命令包名改为 `com.lw.web2harmony.runtime`。调试包只用于 Profile 中授权的测试设备，不是可任意分发的安装包。
 

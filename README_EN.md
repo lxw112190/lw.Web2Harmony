@@ -37,13 +37,17 @@ Local HAP builds do not require CI. Import the official CLT ZIP with `tools/inst
 
 ## CI and signing
 
-[CI setup](docs/CI.md) documents the required official toolchain URL, SHA-256 and license acceptance repository variables. Missing setup fails the HAP job explicitly.
+[CI scope](docs/CI.md): Windows GUI/CLI compilation, regression tests, sample project exports and one desktop distribution ZIP. CI no longer downloads Huawei SDKs, compiles HAPs or reads real signing Secrets. Old `HARMONY_CLT_URL`, license and signing variables are no longer needed. JDK 21 is used only for ephemeral P12/CSR integration tests; test keys are deleted.
 
-Unsigned HAPs cannot be used as signed real-device test packages. Import your own P12, certificate and device-specific debug Profile. Six GitHub Secrets configure local-demo signing; remote-demo HAPs remain unsigned.
+HAPs are built locally and verified on real devices. Unsigned HAPs cannot be used as signed device test packages. Windows CI success does not prove ArkTS compilation, certificate eligibility or successful device installation.
+
+Generate a local EC/secp256r1 P12 and SHA256withECDSA CSR using `tools/create-signing-request.ps1 -BundleName <bundle> -CommonName <applicant>`. Passwords are prompted/confirmed, DPAPI-protected and never passed on the command line. Existing directories are not overwritten. Upload only the CSR to Huawei to request the certificate, then obtain a matching device Profile. No locally generated certificate/Profile is claimed to grant commercial HarmonyOS device authorization.
+
+Import the returned material using `tools/configure-signing.ps1 -BundleName <bundle> -RequestDirectory signing/requests/<bundle> -Certificate <cer> -Profile <p7b>`. This reuses protected request credentials and verifies the request's P12/CSR hashes. See [signing preparation and backup](docs/SIGNING.md).
 
 For local use, run `tools/configure-signing.ps1 -BundleName <bundle> -StoreFile <p12> -Certificate <cer> -Profile <p7b> -KeyAlias <alias>`. Passwords are entered securely and Windows DPAPI-protected for the current user. The GUI and `pack` automatically reuse `signing/<bundle>/signing.local.json`; the base Runtime build does likewise. Re-import credentials on another Windows account/computer. Import does not grant device eligibility: Huawei-issued certificates and a matching Profile authorizing the device are still required. No locally self-signed identity is claimed to replace Huawei authorization.
 
-The pipeline compiles Windows tools, runs export/Unicode/logging regression tests, builds actual local and remote HAPs, checks their structure, and packages one final ZIP. Tagged releases require that pipeline to pass.
+The pipeline packages one desktop ZIP with the base Runtime source and SHA256 checksums, not HAPs. Ordinary pushes/PRs use read-only repository permissions. A separate tag-push-only job publishes GitHub Releases after the desktop job passes.
 
 Public distributions exclude Huawei SDK, JDK and private signing materials.
 

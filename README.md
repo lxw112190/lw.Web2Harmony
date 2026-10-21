@@ -25,7 +25,7 @@ ctest --test-dir build -C Release --output-on-failure
 .\tools\build-desktop.ps1
 ```
 
-本地不需要安装鸿蒙 SDK 即可编译 Windows 工具或导出工程。构建 HAP 在 CI 或具备配套工具链的电脑上执行。spdlog 使用锁定 SHA-256；可以复用 .deps/spdlog.tar.gz 离线归档。
+本地不需要安装鸿蒙 SDK 即可编译 Windows 工具或导出工程。HAP 只在具备配套工具链的本机编译，CI 不再编译 HAP。spdlog 使用锁定 SHA-256；可以复用 .deps/spdlog.tar.gz 离线归档。
 
 ## 使用
 
@@ -90,22 +90,32 @@ toolchain/
 
 签名体验是“首次配置，以后自动复用”，但签名资格不能照搬 Android 自签名。Android 可本地创建自签身份；商业鸿蒙真机调试需要开发者证书和包含测试设备的调试 Profile。没有材料时输出 `-unsigned.hap`，仅用于构建验证，不能直接装真机。
 
-首次准备 P12、CER、P7B 后，在项目根目录导入；密码交互输入，不写进命令行：
+本机可以先生成 P12 私钥库和 CSR 申请文件，密码交互输入并确认：
 
 ```powershell
-.\tools\configure-signing.ps1 -BundleName com.lw.web2harmony.runtime -StoreFile D:\private\developer.p12 -Certificate D:\private\debug.cer -Profile D:\private\debug.p7b -KeyAlias your-key-alias
+.\tools\create-signing-request.ps1 -BundleName com.lw.web2harmony.runtime -CommonName '天天代码码天天'
+```
+
+默认保存至 `signing/requests/<BundleName>/`，使用 EC / secp256r1 / SHA256withECDSA。只把 `developer.csr` 提交给华为申请证书，再申请对应应用、证书和测试手机的 Profile；P12 和密码文件必须保密。工具不会自行签发可用于商业鸿蒙真机的证书或 Profile。
+
+下载 `.cer`、`.p7b` 后，从请求目录导入，自动复用本机加密密码：
+
+```powershell
+.\tools\configure-signing.ps1 -BundleName com.lw.web2harmony.runtime -RequestDirectory .\signing\requests\com.lw.web2harmony.runtime -Certificate D:\private\debug.cer -Profile D:\private\debug.p7b
 .\tools\build-runtime.ps1
 ```
 
-导入后材料位于 `signing/<BundleName>/`，密码使用 Windows DPAPI 加密并限制当前用户访问。GUI、`pack` 和基础 Runtime 构建会自动使用对应应用的配置；GUI 中的 Bundle Name 必须与 Profile 匹配。换 Windows 用户/电脑需重新导入密码；增加测试手机、证书过期或换应用包名时需准备匹配的有效 Profile。CI 仍支持环境变量密码，不使用本机 DPAPI 文件。不要将整个签名目录提交、打包或发送给他人。
+导入后材料位于 `signing/<BundleName>/`，密码使用 Windows DPAPI 加密并限制当前用户访问。GUI、`pack` 和基础 Runtime 构建会自动使用对应应用的配置；GUI 中的 Bundle Name 必须与 Profile 匹配。换 Windows 用户/电脑需重新导入密码；增加测试手机、证书过期或换应用包名时需准备匹配的有效 Profile。已有 P12 仍支持原来的手动导入方式。详见 [签名准备与备份](docs/SIGNING.md)。CI 不读取真实密钥、证书、Profile 或密码。
 
 官方流程：[申请调试 Profile](https://developer.huawei.com/consumer/cn/doc/doccenter-getting-started/agc-help-debug-profile-0000002248181278)、[DevEco Studio 自动签名](https://developer.huawei.com/consumer/cn/doc/doccenter-deveco-studio/ide-signing-auto)。
 
 ## CI、发布与真机验收
 
-完整配置见 [docs/CI.md](docs/CI.md)，包括工具链 URL / SHA-256、许可确认、签名 Secrets 和 hdc 安装命令。
+职责见 [docs/CI.md](docs/CI.md)：CI 只负责 Windows 打包器的编译、测试、工程导出回归和发行，不下载鸿蒙 SDK，不需要 `HARMONY_CLT_URL`、华为许可变量或签名 Secrets。
 
-推送后 CI 先编译 Windows 工具及回归测试，再真实编译本地和在线 Demo 的 HAP。工具链变量未配置会明确失败，未签名包会明确标识。成功后生成单个发行 ZIP，附带 HAP、Windows 工具、工程模板和 SHA-256。
+CI 成功生成一个 Windows 发行 ZIP，包含 GUI/CLI、基础 Runtime 源码、模板、样例、工具脚本和 SHA-256，不包含 HAP、SDK、JDK 或私有材料。CI 中的 JDK 21 仅用于临时 P12/CSR 回归测试，测试密钥随后删除。带标签的发布由独立任务执行，普通推送/PR 没有仓库写权限。
+
+HAP 在本机用 `build-runtime.ps1` 或 GUI 打包，再真机验证；CI 通过不表示 ArkTS 编译、证书有效性或真机安装已通过。
 
 ```bash
 git add .
@@ -128,7 +138,7 @@ git push origin v0.1.0
 
 ## 当前范围
 
-已实现基础 Runtime 工程、GUI 单按钮打包、CLI 工程导出、资源映射、HTTP 开关、横竖屏配置、返回键、轮转日志及签名导入/自动复用。尚未实现网页文件选择/拍照、下载管理、HTML5 视频全屏回调、外部文本打开及工具链自动联网初始化。签名/安装链路在取得实际材料并真机测试前不宣称验收完成。
+已实现基础 Runtime 工程、GUI 单按钮打包、CLI 工程导出、资源映射、HTTP 开关、横竖屏配置、返回键、轮转日志、P12/CSR 本地生成及签名导入/自动复用。尚未实现网页文件选择/拍照、下载管理、HTML5 视频全屏回调、外部文本打开及工具链自动联网初始化。签名/安装链路在取得实际材料并真机测试前不宣称验收完成。
 
 首台计划验收设备：Mate 80 Pro / SGT-AL00 / HarmonyOS 7.0.0.109 SP6。
 
