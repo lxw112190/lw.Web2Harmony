@@ -13,9 +13,12 @@ foreach ($exe in @('lw.Web2Harmony.exe','lw.Web2Harmony.GUI.exe')) {
     if ((Get-Item -LiteralPath $file).VersionInfo.ProductVersion -ne $lock.productVersion) { throw 'Binary version mismatch' }
     Copy-Item -LiteralPath $file -Destination "$package/bin"
 }
-foreach ($dir in @('assets','runtime-template','samples','tools','docs','third_party')) {
+foreach ($dir in @('assets','samples','tools','docs','third_party')) {
     Copy-Item -LiteralPath (Join-Path $root $dir) -Destination $package -Recurse
 }
+& "$PSScriptRoot/copy-runtime-source.ps1" -Destination "$package/runtime"
+New-Item -ItemType Directory -Force -Path "$package/packer"|Out-Null
+Copy-Item -LiteralPath (Join-Path $root 'packer/templates') -Destination "$package/packer/templates" -Recurse
 foreach ($file in @('LICENSE','README.md','README_EN.md','THIRD-PARTY-NOTICES.md','toolchain.lock.json')) {
     Copy-Item -LiteralPath (Join-Path $root $file) -Destination $package
 }

@@ -2,9 +2,13 @@
   "schemaVersion": 1,
   "productVersion": "0.1.0",
   "runtimeVersion": "1",
-  "modelVersion": "6.0.0",
+  "commandLineToolsVersion": "26.0.0.851",
+  "commandLineToolsSha256": "ac8d0563f47f95ca78799ea4aa494fa260bc3f7c8f2a569ac629af1794b5d71c",
+  "hvigorVersion": "6.26.8",
+  "javaMajorVersion": 21,
+  "modelVersion": "26.0.0",
   "compatibleSdkVersion": "6.0.0(20)",
-  "targetSdkVersion": "6.0.0(20)",
+  "targetSdkVersion": "26.0.0",
   "runtimeOS": "HarmonyOS",
-  "note": "Initial SDK baseline; compile using matching official Command Line Tools. HarmonyOS 7 device compatibility requires real-device validation."
+  "note": "Verified Windows CLT archive metadata: SDK 26.0.0.105 / API 26. Minimum SDK remains API 20; HarmonyOS 7 device compatibility requires real-device validation."
 }

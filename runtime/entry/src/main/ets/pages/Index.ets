@@ -26,7 +26,7 @@ struct Index {
     let source: fs.File | undefined = undefined;
     let target: fs.File | undefined = undefined;
     try {
-      const context: common.UIAbilityContext = getContext(this) as common.UIAbilityContext;
+      const context: common.UIAbilityContext = this.getUIContext().getHostContext() as common.UIAbilityContext;
       const chooser: picker.DocumentViewPicker = new picker.DocumentViewPicker(context);
       const options: picker.DocumentSaveOptions = new picker.DocumentSaveOptions();
       options.newFileNames = ['web2harmony-diagnostics.txt'];

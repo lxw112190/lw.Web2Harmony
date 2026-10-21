@@ -17,9 +17,9 @@
 using namespace lw::web2harmony;
 namespace {
 constexpr UINT Complete=WM_APP+1;
-enum {Mode=101,Source,Name,Bundle,Version,Code,Icon,Output,Tools,Java,Sign,AllowHttp,Fullscreen,Orientation,
-      SelectSource=201,SelectIcon,ResetIcon,SelectOutput,SelectTools,SelectJava,SelectSign,
-      Export=301,Build,Status,Preview};
+enum {Mode=101,Source,Name,Bundle,Version,Code,Icon,Output,AllowHttp,Fullscreen,Orientation,
+      SelectSource=201,SelectIcon,ResetIcon,SelectOutput,
+      Build=301,Status,Preview,SourceHint,ToolchainStatus,SigningStatus};
 struct State {
     HWND window=nullptr; HFONT font=nullptr; HFONT titleFont=nullptr; HBITMAP bitmap=nullptr;
     bool busy=false; std::filesystem::path root;
@@ -38,11 +38,11 @@ std::wstring Text(State& s,int id) {
     GetWindowTextW(child,buffer.data(),static_cast<int>(buffer.size()));return buffer.data();
 }
 void Set(State& s,int id,const std::wstring& value) {SetWindowTextW(GetDlgItem(s.window,id),value.c_str());}
-std::filesystem::path Select(HWND parent,bool directory,bool png=false) {
+std::filesystem::path Select(HWND parent,bool directory) {
     IFileOpenDialog* dialog=nullptr;
     if(FAILED(CoCreateInstance(CLSID_FileOpenDialog,nullptr,CLSCTX_INPROC_SERVER,IID_PPV_ARGS(&dialog)))) return {};
     DWORD flags=0;dialog->GetOptions(&flags);dialog->SetOptions(flags|FOS_FORCEFILESYSTEM|(directory?FOS_PICKFOLDERS:FOS_FILEMUSTEXIST));
-    COMDLG_FILTERSPEC filter{png?L"PNG 图标":L"签名配置 JSON",png?L"*.png":L"*.json"};
+    COMDLG_FILTERSPEC filter{L"PNG 图标",L"*.png"};
     if(!directory) dialog->SetFileTypes(1,&filter);
     std::filesystem::path selected;
     if(SUCCEEDED(dialog->Show(parent))) {
@@ -79,7 +79,20 @@ void PreviewIcon(State& s,const std::filesystem::path& path) {
     SendMessageW(GetDlgItem(s.window,Preview),STM_SETIMAGE,IMAGE_BITMAP,reinterpret_cast<LPARAM>(bitmap));
     if(s.bitmap) DeleteObject(s.bitmap);s.bitmap=bitmap;
 }
-void Start(State& s,bool build) {
+void RefreshStatus(State& s) {
+    Set(s,ToolchainStatus,LocalToolchainReady(s.root)?L"工具链：已就绪":L"工具链：尚未配置，请先完成一次性配置");
+    Set(s,SigningStatus,SigningConfigurationFor(s.root,WideToUtf8(Text(s,Bundle))).empty()?
+        L"签名：未配置，将生成未签名 HAP，不能直接安装到真机":
+        L"签名：已发现此应用的配置，将自动签名（需有效证书与设备 Profile）");
+}
+void SetBusy(State& s,bool busy) {
+    s.busy=busy;
+    for(const int id:{Mode,Source,Name,Bundle,Version,Code,Icon,Output,AllowHttp,Fullscreen,Orientation,
+                     SelectSource,SelectIcon,ResetIcon,SelectOutput,Build})
+        EnableWindow(GetDlgItem(s.window,id),!busy);
+    if(!busy) EnableWindow(GetDlgItem(s.window,SelectSource),SendMessageW(GetDlgItem(s.window,Mode),CB_GETCURSEL,0,0)!=1);
+}
+void Start(State& s) {
     if(s.busy)return;
     try {
         HarmonyProject p;
@@ -96,67 +109,59 @@ void Start(State& s,bool build) {
         const auto orientation=SendMessageW(GetDlgItem(s.window,Orientation),CB_GETCURSEL,0,0);
         p.orientation=orientation==1?"portrait":orientation==2?"landscape":"auto";
         p.Validate();
-        if(Text(s,Output).empty())throw std::runtime_error("Select an empty output folder");
+        if(Text(s,Output).empty())throw std::runtime_error("Select a HAP output folder");
         const auto output=std::filesystem::absolute(Text(s,Output));const auto root=s.root;
-        const std::filesystem::path tools=Text(s,Tools),jdk=Text(s,Java),sign=Text(s,Sign);
-        if(build && (tools.empty()||jdk.empty()))throw std::runtime_error("Select Command Line Tools and JDK before building a HAP");
-        s.busy=true;EnableWindow(GetDlgItem(s.window,Export),FALSE);EnableWindow(GetDlgItem(s.window,Build),FALSE);
-        Set(s,Status,build?L"正在生成工程并构建 HAP，请稍候…":L"正在导出鸿蒙工程…");
+        if(!LocalToolchainReady(root)) {
+            MessageBoxW(s.window,L"请先完成一次性工具链配置，然后重新打开程序。详见 docs/LOCAL-BUILD.md。",L"工具链尚未就绪",MB_OK|MB_ICONINFORMATION);
+            return;
+        }
+        SetBusy(s,true);
+        Set(s,Status,L"正在打包鸿蒙 HAP，请稍候…");
         const auto window=s.window;
-        std::thread([p,output,root,tools,jdk,sign,build,window]() {
+        std::thread([p,output,root,window]() {
             auto result=std::make_unique<Completion>();
             try {
-                ExportProject(p,output,root);
-                if(build) BuildHap(output,root,tools,jdk,sign);
-                result->success=true;result->path=build?output/"dist":output;
-                result->message=build?(sign.empty()?L"未签名 HAP 构建成功；真机安装前需要签名":L"已签名 HAP 构建成功，请在已注册设备上测试"):
-                    L"鸿蒙工程导出成功，可在 DevEco Studio 打开或提交 CI 构建";
+                const auto artifact=PackageHap(p,output,root);
+                result->success=true;result->path=artifact.parent_path();
+                result->message=SigningConfigurationFor(root,p.bundleName).empty()?
+                    L"未签名 HAP 已生成 · 仅用于构建验证，真机安装需要配置签名":L"已签名 HAP 已生成 · 请在 Profile 授权的设备上测试";
             } catch(const std::exception& error) {result->message=L"失败："+Utf8ToWide(error.what());PackerLogger().Error(error.what());}
             if(PostMessageW(window,Complete,0,reinterpret_cast<LPARAM>(result.get())))result.release();
         }).detach();
-    } catch(const std::exception& error) {MessageBoxW(s.window,Utf8ToWide(error.what()).c_str(),L"请检查项目设置",MB_OK|MB_ICONERROR);}
+    } catch(const std::exception& error) {SetBusy(s,false);MessageBoxW(s.window,Utf8ToWide(error.what()).c_str(),L"请检查项目设置",MB_OK|MB_ICONERROR);}
 }
 void Interface(State& s) {
     const auto title=Control(s,L"STATIC",L"lw.Web2Harmony",0,30,20,500,40);
     SendMessageW(title,WM_SETFONT,reinterpret_cast<WPARAM>(s.titleFont),TRUE);
-    Label(s,L"将 Web 项目打包为鸿蒙原生应用",32,65,650);Label(s,L"v0.1.0",810,28,100);
-    Control(s,L"BUTTON",L"01 网页来源与构建环境",BS_GROUPBOX,25,105,420,555);
-    Control(s,L"BUTTON",L"02 应用设置",BS_GROUPBOX,465,105,440,555);
-    Label(s,L"网页来源",45,140);
-    const auto mode=Control(s,L"COMBOBOX",L"",CBS_DROPDOWNLIST|WS_TABSTOP,45,168,380,120,Mode);
+    Label(s,L"将 Web 项目快速打包为鸿蒙应用",32,65,600);Label(s,L"v" LW_VERSION,625,28,80);
+    Control(s,L"BUTTON",L"01 网页来源",BS_GROUPBOX,25,105,680,175);
+    Control(s,L"BUTTON",L"02 应用设置",BS_GROUPBOX,25,295,680,425);
+    const auto mode=Control(s,L"COMBOBOX",L"",CBS_DROPDOWNLIST|WS_TABSTOP,45,145,225,120,Mode);
     SendMessageW(mode,CB_ADDSTRING,0,reinterpret_cast<LPARAM>(L"本地静态网页"));SendMessageW(mode,CB_ADDSTRING,0,reinterpret_cast<LPARAM>(L"在线网址"));SendMessageW(mode,CB_SETCURSEL,0,0);
-    Label(s,L"网页目录 / 在线网址",45,212);
-    Edit(s,Source,L"",45,242,285);Control(s,L"BUTTON",L"选择目录",WS_TABSTOP,340,242,85,30,SelectSource);
-    Control(s,L"BUTTON",L"允许 HTTP（仅建议可信内网）",BS_AUTOCHECKBOX|WS_TABSTOP,45,285,380,25,AllowHttp);
-    Label(s,L"鸿蒙 Command Line Tools 目录",45,340);
-    Edit(s,Tools,(s.root/"toolchain/command-line-tools").c_str(),45,370,285);
-    Control(s,L"BUTTON",L"选择目录",WS_TABSTOP,340,370,85,30,SelectTools);
-    Label(s,L"Java JDK 目录",45,425);Edit(s,Java,(s.root/"toolchain/jdk").c_str(),45,455,285);
-    Control(s,L"BUTTON",L"选择目录",WS_TABSTOP,340,455,85,30,SelectJava);
-    Label(s,L"签名配置（可选）",45,510);Edit(s,Sign,L"",45,540,285);
-    Control(s,L"BUTTON",L"选择配置",WS_TABSTOP,340,540,85,30,SelectSign);
-    Label(s,L"未导入签名配置时，生成未签名 HAP。",45,590,380);
-    Label(s,L"真机签名须包含测试设备对应的 Profile。",45,617,380);
-    Label(s,L"应用名称",485,140);Edit(s,Name,L"我的鸿蒙应用",485,170,400);
-    Label(s,L"Bundle Name",485,220);Edit(s,Bundle,L"com.example.myharmonyapp",485,250,400);
-    Label(s,L"Version Name",485,300,195);Label(s,L"Version Code",700,300,180);
-    Edit(s,Version,L"1.0.0",485,330,195);Edit(s,Code,L"1",700,330,185);
-    Label(s,L"应用图标",485,380);
-    Control(s,L"STATIC",L"",SS_BITMAP|SS_CENTERIMAGE,485,412,64,64,Preview);
-    Edit(s,Icon,L"",565,412,235);Control(s,L"BUTTON",L"选择图标",WS_TABSTOP,810,410,75,30,SelectIcon);
-    Control(s,L"BUTTON",L"使用默认",WS_TABSTOP,810,449,75,30,ResetIcon);
-    Label(s,L"建议 512×512 或更高清的正方形 PNG",565,452,240);
-    Label(s,L"屏幕方向",485,495,180);
-    const auto direction=Control(s,L"COMBOBOX",L"",CBS_DROPDOWNLIST|WS_TABSTOP,485,523,190,140,Orientation);
+    Control(s,L"BUTTON",L"允许 HTTP（仅建议可信内网）",BS_AUTOCHECKBOX|WS_TABSTOP,300,147,385,25,AllowHttp);
+    Edit(s,Source,L"",45,195,530);Control(s,L"BUTTON",L"选择目录",WS_TABSTOP,585,195,100,30,SelectSource);
+    Control(s,L"STATIC",L"选择 HTML / Vue / React 的静态构建目录（入口 index.html）",0,45,243,640,24,SourceHint);
+    Label(s,L"应用名称",45,328,310);Edit(s,Name,L"我的鸿蒙应用",45,355,310);
+    Label(s,L"Bundle Name",375,328,310);Edit(s,Bundle,L"com.example.myharmonyapp",375,355,310);
+    Label(s,L"应用图标",45,402);
+    Control(s,L"STATIC",L"",SS_BITMAP|SS_CENTERIMAGE,45,430,64,64,Preview);
+    Edit(s,Icon,L"",125,430,450);Control(s,L"BUTTON",L"选择图标",WS_TABSTOP,585,428,100,30,SelectIcon);
+    Control(s,L"BUTTON",L"使用默认",WS_TABSTOP,585,468,100,30,ResetIcon);
+    Label(s,L"留空使用内置图标；建议 512×512 正方形 PNG",125,473,450);
+    Label(s,L"Version Name",45,515,180);Label(s,L"Version Code",245,515,100);Label(s,L"屏幕方向",365,515,180);
+    Edit(s,Version,L"1.0.0",45,540,180);Edit(s,Code,L"1",245,540,100);
+    const auto direction=Control(s,L"COMBOBOX",L"",CBS_DROPDOWNLIST|WS_TABSTOP,365,540,180,140,Orientation);
     for(const auto text:{L"自动",L"竖屏",L"横屏"})SendMessageW(direction,CB_ADDSTRING,0,reinterpret_cast<LPARAM>(text));
     SendMessageW(direction,CB_SETCURSEL,0,0);
-    Control(s,L"BUTTON",L"全屏显示",BS_AUTOCHECKBOX|WS_TABSTOP,705,525,180,25,Fullscreen);
-    Label(s,L"输出工程目录（请选择空目录）",485,576);
-    Edit(s,Output,L"",485,606,310);Control(s,L"BUTTON",L"选择目录",WS_TABSTOP,805,606,80,30,SelectOutput);
-    Control(s,L"BUTTON",L"导出鸿蒙工程",WS_TABSTOP,25,680,420,45,Export);
-    Control(s,L"BUTTON",L"生成鸿蒙 HAP",WS_TABSTOP|BS_DEFPUSHBUTTON,465,680,440,45,Build);
-    Control(s,L"STATIC",L"准备就绪 · 可先导出工程，再通过 CI 构建",0,25,744,880,42,Status);
+    Control(s,L"BUTTON",L"全屏显示",BS_AUTOCHECKBOX|WS_TABSTOP,565,542,120,25,Fullscreen);
+    Label(s,L"HAP 输出目录",45,586);
+    Edit(s,Output,(s.root/L"output").c_str(),45,611,530);Control(s,L"BUTTON",L"选择位置",WS_TABSTOP,585,611,100,30,SelectOutput);
+    Control(s,L"STATIC",L"",0,45,656,640,22,ToolchainStatus);
+    Control(s,L"STATIC",L"",0,45,686,640,22,SigningStatus);
+    Control(s,L"BUTTON",L"生成鸿蒙 HAP",WS_TABSTOP|BS_DEFPUSHBUTTON,25,740,680,45,Build);
+    Control(s,L"STATIC",L"准备就绪 · 请选择网页来源和 HAP 输出目录",0,25,804,680,36,Status);
     PreviewIcon(s,s.root/"assets/default-app-icon.png");
+    RefreshStatus(s);
 }
 LRESULT CALLBACK WindowProc(HWND window,UINT message,WPARAM wp,LPARAM lp) {
     auto* s=reinterpret_cast<State*>(GetWindowLongPtrW(window,GWLP_USERDATA));
@@ -171,25 +176,41 @@ LRESULT CALLBACK WindowProc(HWND window,UINT message,WPARAM wp,LPARAM lp) {
         if(!s)return DefWindowProcW(window,message,wp,lp);
         if(message==WM_COMMAND && !s->busy) {
             const int id=LOWORD(wp);
-            if(id==Export||id==Build){Start(*s,id==Build);return 0;}
+            if(id==Build){Start(*s);return 0;}
+            if(id==Mode && HIWORD(wp)==CBN_SELCHANGE) {
+                const bool remote=SendMessageW(GetDlgItem(window,Mode),CB_GETCURSEL,0,0)==1;
+                EnableWindow(GetDlgItem(window,SelectSource),!remote);
+                Set(*s,Source,L"");
+                Set(*s,SourceHint,remote?L"输入完整的 HTTPS 网址；HTTP 仅建议用于可信内网":L"选择 HTML / Vue / React 的静态构建目录（入口 index.html）");
+                return 0;
+            }
+            if(id==Bundle && HIWORD(wp)==EN_CHANGE) {RefreshStatus(*s);return 0;}
+            if(id==Icon && HIWORD(wp)==EN_KILLFOCUS) {
+                PreviewIcon(*s,Text(*s,Icon).empty()?s->root/"assets/default-app-icon.png":std::filesystem::path(Text(*s,Icon)));
+                return 0;
+            }
             if(id==ResetIcon){Set(*s,Icon,L"");PreviewIcon(*s,s->root/"assets/default-app-icon.png");return 0;}
-            const std::map<int,int> fields{{SelectSource,Source},{SelectIcon,Icon},{SelectOutput,Output},{SelectTools,Tools},{SelectJava,Java},{SelectSign,Sign}};
+            const std::map<int,int> fields{{SelectSource,Source},{SelectIcon,Icon},{SelectOutput,Output}};
             const auto found=fields.find(id);
             if(found!=fields.end()) {
-                const auto path=Select(window,id!=SelectIcon&&id!=SelectSign,id==SelectIcon);
+                const auto path=Select(window,id!=SelectIcon);
                 if(!path.empty()) {if(id==SelectIcon)PreviewIcon(*s,path);Set(*s,found->second,path.wstring());}
                 return 0;
             }
         }
         if(message==Complete) {
             std::unique_ptr<Completion> result(reinterpret_cast<Completion*>(lp));
-            s->busy=false;EnableWindow(GetDlgItem(window,Export),TRUE);EnableWindow(GetDlgItem(window,Build),TRUE);
+            SetBusy(*s,false);RefreshStatus(*s);
             Set(*s,Status,result->message);
             if(result->success)ShellExecuteW(window,L"open",result->path.c_str(),nullptr,nullptr,SW_SHOWNORMAL);
             else MessageBoxW(window,(result->message+L"\n\n日志："+PackerLogFile().wstring()).c_str(),L"构建失败",MB_OK|MB_ICONERROR);
             return 0;
         }
         if(message==WM_CLOSE && s->busy) {MessageBoxW(window,L"正在构建，请等待完成后关闭。",L"lw.Web2Harmony",MB_OK);return 0;}
+        if(message==WM_CTLCOLORSTATIC) {
+            const auto dc=reinterpret_cast<HDC>(wp);SetBkColor(dc,GetSysColor(COLOR_WINDOW));SetBkMode(dc,OPAQUE);
+            return reinterpret_cast<LRESULT>(GetSysColorBrush(COLOR_WINDOW));
+        }
         if(message==WM_DESTROY) {
             if(s->bitmap)DeleteObject(s->bitmap);DeleteObject(s->font);DeleteObject(s->titleFont);delete s;
             SetWindowLongPtrW(window,GWLP_USERDATA,0);PostQuitMessage(0);return 0;
@@ -208,7 +229,7 @@ int WINAPI wWinMain(HINSTANCE instance,HINSTANCE,PWSTR command,int) {
     cls.hIcon=LoadIconW(instance,MAKEINTRESOURCEW(101));cls.hIconSm=cls.hIcon;cls.hCursor=LoadCursorW(nullptr,IDC_ARROW);
     cls.hbrBackground=reinterpret_cast<HBRUSH>(COLOR_WINDOW+1);
     RegisterClassExW(&cls);
-    RECT bounds{0,0,930,800};const DWORD style=WS_OVERLAPPED|WS_CAPTION|WS_SYSMENU|WS_MINIMIZEBOX;
+    RECT bounds{0,0,730,850};const DWORD style=WS_OVERLAPPED|WS_CAPTION|WS_SYSMENU|WS_MINIMIZEBOX;
     AdjustWindowRectEx(&bounds,style,FALSE,WS_EX_CONTROLPARENT);
     RECT area{};SystemParametersInfoW(SPI_GETWORKAREA,0,&area,0);
     const auto window=CreateWindowExW(WS_EX_CONTROLPARENT,cls.lpszClassName,L"lw.Web2Harmony · 网页转鸿蒙应用",style,
@@ -217,7 +238,21 @@ int WINAPI wWinMain(HINSTANCE instance,HINSTANCE,PWSTR command,int) {
         bounds.right-bounds.left,bounds.bottom-bounds.top,nullptr,nullptr,instance,nullptr);
     int result=1;
     if(window) {
-        if(std::wstring(command)==L"--smoke-test"){DestroyWindow(window);result=0;}
+        if(std::wstring(command)==L"--smoke-test"){
+            wchar_t caption[128]{};GetWindowTextW(GetDlgItem(window,Build),caption,128);
+            bool unexpected=false;
+            EnumChildWindows(window,[](HWND child,LPARAM data)->BOOL {
+                wchar_t text[128]{};GetWindowTextW(child,text,128);
+                if(std::wstring(text).find(L"导出鸿蒙工程")!=std::wstring::npos ||
+                   std::wstring(text).find(L"Java JDK 目录")!=std::wstring::npos ||
+                   std::wstring(text).find(L"Command Line Tools 目录")!=std::wstring::npos)
+                    *reinterpret_cast<bool*>(data)=true;
+                return TRUE;
+            },reinterpret_cast<LPARAM>(&unexpected));
+            result=std::wstring(caption)==L"生成鸿蒙 HAP" && !unexpected &&
+                (GetWindowLongW(window,GWL_STYLE)&(WS_MAXIMIZEBOX|WS_THICKFRAME))==0?0:1;
+            DestroyWindow(window);
+        }
         else {ShowWindow(window,SW_SHOW);MSG msg{};while(GetMessageW(&msg,nullptr,0,0)>0){if(!IsDialogMessageW(window,&msg)){TranslateMessage(&msg);DispatchMessageW(&msg);}}result=static_cast<int>(msg.wParam);}
     }
     if(SUCCEEDED(com))CoUninitialize();return result;

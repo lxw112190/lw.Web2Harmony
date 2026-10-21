@@ -26,4 +26,11 @@ void ExportProject(const HarmonyProject& project, const std::filesystem::path& o
 void BuildHap(const std::filesystem::path& project, const std::filesystem::path& applicationRoot,
               const std::filesystem::path& toolchain, const std::filesystem::path& javaHome,
               const std::filesystem::path& signing = {});
+bool LocalToolchainReady(const std::filesystem::path& applicationRoot);
+std::filesystem::path SigningConfigurationFor(const std::filesystem::path& applicationRoot,
+                                               const std::string& bundleName);
+// User-facing workflow: private work directory, final HAP + metadata in output.
+std::filesystem::path PackageHap(const HarmonyProject& project,
+                               const std::filesystem::path& outputDirectory,
+                               const std::filesystem::path& applicationRoot);
 }

@@ -6,3 +6,12 @@ local.properties
 signing/
 signing.local.json
 .lw-signing-profile-backup
+dist/
+WEB-SHA256SUMS.txt
+lw-export.json
+credentials.dpapi.json
+*.p12
+*.pfx
+*.p7b
+*.cer
+*.key

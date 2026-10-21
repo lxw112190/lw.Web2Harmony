@@ -1,8 +1,17 @@
 build/
+build-before-move/
+logs/
 out/
+output/
 .deps/
 toolchain/
 .cache/
+.work/
+runtime/build/
+runtime/entry/build/
+runtime/dist/
+runtime/WEB-SHA256SUMS.txt
+runtime/lw-export.json
 .vs/
 .idea/
 .hvigor/

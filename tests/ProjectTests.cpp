@@ -21,6 +21,10 @@ int wmain(int argc,wchar_t** argv) {
         Require(Sha256File(p.source/"index.html")==Sha256File(target/"entry/src/main/resources/rawfile/www/index.html"),"Web asset bytes changed");
         Require(ReadUtf8(target/"entry/src/main/ets/common/WebAssets.ets").find(u8"/测试页/index.html")!=std::string::npos,"Unicode mapping missing");
         Require(ReadUtf8(target/"AppScope/resources/base/element/string.json").find(u8"鸿蒙网页测试")!=std::string::npos,"Unicode application name corrupted");
+        const auto appConfig=ReadUtf8(target/"entry/src/main/ets/common/AppConfig.ets");
+        Require(appConfig.find("static readonly appName:")!=std::string::npos,"Missing appName field");
+        Require(appConfig.find("static readonly name:")==std::string::npos,"AppConfig must not shadow Function.name");
+        Require(ReadUtf8(target/"hvigor/hvigor-config.json5").find("26.0.0")!=std::string::npos,"CLT model version mismatch");
         Require(!fs::exists(target/".lw-export-incomplete"),"Incomplete marker left after success");
         Rejected([&]{ExportProject(p,target,root);},"Must not overwrite existing project");
         Rejected([&]{ExportProject(p,p.source/"nested",root);},"Must reject recursive output");
@@ -31,6 +35,15 @@ int wmain(int argc,wchar_t** argv) {
         auto remote=HarmonyProject::Load(root/"samples/remote/project.json");
         ExportProject(remote,work/"remote",root);
         Require(!fs::exists(work/"remote/entry/src/main/resources/rawfile/www"),"Remote should not bundle Web assets");
+        Require(!fs::exists(target/"build") && !fs::exists(target/"dist") &&
+            !fs::exists(target/"entry/build") && !fs::exists(target/".hvigor") &&
+            !fs::exists(target/"local.properties"),"Base runtime caches/config leaked into generated project");
+        Require(Sha256File(target/"entry/src/main/ets/pages/Index.ets")==
+            Sha256File(root/"runtime/entry/src/main/ets/pages/Index.ets"),"Packer is not using canonical runtime source");
+        Rejected([&]{ExportProject(p,root/"runtime",root);},"Base runtime must never be overwritten");
+        Require(SigningConfigurationFor(root,"../unsafe").empty(),"Signing lookup accepted path traversal");
+        Require(SigningConfigurationFor(root,"com.lw.unknown").empty(),"Signing lookup should not reuse another bundle identity");
+        Require(!LocalToolchainReady(work/"missing-tools"),"Missing local tools reported as ready");
         const auto source=work/"custom-web";
         WriteUtf8(source/"index.html","<!doctype html>");
         WriteUtf8(source/".env","TOKEN=must-not-package");

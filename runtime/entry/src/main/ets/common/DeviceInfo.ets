@@ -4,7 +4,7 @@ import { AppConfig } from './AppConfig';
 import { RuntimeLog } from './RuntimeLog';
 export function recordDeviceInfo(): void {
   RuntimeLog.write('INFO','Session start; Time UTC: '+new Date().toISOString(),'device-info.log');
-  RuntimeLog.write('INFO','App: '+AppConfig.name+'; bundle='+AppConfig.bundleName+
+  RuntimeLog.write('INFO','App: '+AppConfig.appName+'; bundle='+AppConfig.bundleName+
     '; version='+AppConfig.version+'; runtime='+AppConfig.runtimeVersion,'device-info.log');
   RuntimeLog.write('INFO','Manufacturer='+deviceInfo.manufacture+'; model='+deviceInfo.productModel+
     '; OS='+deviceInfo.osFullName+'; API='+deviceInfo.sdkApiVersion.toString()+

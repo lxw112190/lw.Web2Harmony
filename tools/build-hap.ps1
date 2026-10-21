@@ -6,6 +6,9 @@ param(
     [string]$SigningConfiguration
 )
 $ErrorActionPreference = 'Stop'
+# Native GUI/CLI capture UTF-8, including Windows PowerShell 5.1 diagnostics.
+[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
+$OutputEncoding = [Console]::OutputEncoding
 $applicationRoot = Split-Path -Parent $PSScriptRoot
 $project = [IO.Path]::GetFullPath($ProjectDirectory)
 $tools = [IO.Path]::GetFullPath($ToolchainDirectory)
@@ -14,7 +17,21 @@ $log = Join-Path $applicationRoot 'logs/hap-build.log'
 $utf8 = [Text.UTF8Encoding]::new($false)
 $stage = 'preflight'
 $secretValues = @()
+$storePassword = $null
+$keyPassword = $null
+function Read-ProtectedPassword([string]$Encrypted) {
+    $secure=ConvertTo-SecureString -String $Encrypted -ErrorAction Stop
+    $pointer=[IntPtr]::Zero
+    try {
+        $pointer=[Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
+        return [Runtime.InteropServices.Marshal]::PtrToStringBSTR($pointer)
+    } finally {
+        if($pointer -ne [IntPtr]::Zero){[Runtime.InteropServices.Marshal]::ZeroFreeBSTR($pointer)}
+        $secure.Dispose()
+    }
+}
 function Write-BuildLog([string]$Text) {
+    $Text = $Text -replace '\x1B\[[0-9;]*[A-Za-z]',''
     foreach ($secret in $script:secretValues) {
         if ($secret) { $Text = $Text.Replace($secret,'[redacted]') }
     }
@@ -62,11 +79,12 @@ try {
     Require-File (Join-Path $tools 'tool/node/node.exe')
     Require-File (Join-Path $jdk 'bin/java.exe')
     if (-not (Test-Path -LiteralPath (Join-Path $tools 'sdk') -PathType Container)) { throw 'HarmonyOS SDK missing under command-line-tools/sdk' }
-    foreach ($name in @('JAVA_HOME','NODE_HOME','DEVECO_SDK_HOME','PATH')) {
+    foreach ($name in @('JAVA_HOME','NODE_HOME','DEVECO_NODE_HOME','DEVECO_SDK_HOME','PATH')) {
         $previousEnvironment[$name] = [Environment]::GetEnvironmentVariable($name,'Process')
     }
     $env:JAVA_HOME = $jdk
     $env:NODE_HOME = Join-Path $tools 'tool/node'
+    $env:DEVECO_NODE_HOME = $env:NODE_HOME
     $env:DEVECO_SDK_HOME = Join-Path $tools 'sdk'
     $env:PATH = (Join-Path $tools 'bin')+';'+$env:NODE_HOME+';'+(Join-Path $jdk 'bin')+';'+$previousEnvironment['PATH']
     $sdkProperty = $env:DEVECO_SDK_HOME.Replace('\','/')
@@ -83,11 +101,23 @@ try {
             if ([string]::IsNullOrWhiteSpace([string]$sign.$field)) { throw "Signing configuration is missing $field" }
         }
         if ($sign.bundleName -ne $export.bundleName) { throw 'Signing configuration bundleName does not match exported application' }
-        if (-not $env:HARMONY_STORE_PASSWORD -or -not $env:HARMONY_KEY_PASSWORD) {
-            throw 'Set HARMONY_STORE_PASSWORD and HARMONY_KEY_PASSWORD in the environment; passwords must not be stored in project JSON.'
-        }
-        $secretValues = @($env:HARMONY_STORE_PASSWORD,$env:HARMONY_KEY_PASSWORD)
         $base = Split-Path -Parent $signPath
+        if ($env:HARMONY_STORE_PASSWORD -and $env:HARMONY_KEY_PASSWORD) {
+            $storePassword=$env:HARMONY_STORE_PASSWORD
+            $keyPassword=$env:HARMONY_KEY_PASSWORD
+        } else {
+            $credentialsPath=Join-Path $base 'credentials.dpapi.json'
+            if(-not (Test-Path -LiteralPath $credentialsPath)){
+                throw 'Import local signing via tools/configure-signing.ps1, or set both HARMONY_STORE_PASSWORD and HARMONY_KEY_PASSWORD for this process.'
+            }
+            $credentials=Get-Content -Raw -LiteralPath $credentialsPath -Encoding UTF8|ConvertFrom-Json
+            if($credentials.schemaVersion -ne 1 -or $credentials.bundleName -ne $export.bundleName){throw 'Local signing credentials do not match this application'}
+            try {
+                $storePassword=Read-ProtectedPassword $credentials.storePassword
+                $keyPassword=Read-ProtectedPassword $credentials.keyPassword
+            } catch {throw 'Cannot decrypt local signing credentials. Import them again under this Windows user.'}
+        }
+        $secretValues = @($storePassword,$keyPassword)
         $paths = @{}
         foreach ($field in @('storeFile','certpath','profile')) {
             $paths[$field] = [IO.Path]::GetFullPath((Join-Path $base $sign.$field))
@@ -95,8 +125,8 @@ try {
         }
         $profile.app.signingConfigs = @(@{
             name='local'; type='HarmonyOS'; material=@{
-                storeFile=$paths.storeFile; storePassword=$env:HARMONY_STORE_PASSWORD
-                keyAlias=$sign.keyAlias; keyPassword=$env:HARMONY_KEY_PASSWORD
+                storeFile=$paths.storeFile; storePassword=$storePassword
+                keyAlias=$sign.keyAlias; keyPassword=$keyPassword
                 certpath=$paths.certpath; profile=$paths.profile; signAlg='SHA256withECDSA'
             }
         })
@@ -155,7 +185,12 @@ try {
     New-Item -ItemType Directory -Force -Path $output | Out-Null
     $artifact = Join-Path $output ($export.bundleName+$suffix)
     Copy-Item -LiteralPath $haps[0].FullName -Destination $artifact -Force
-    $hash = (Get-FileHash -LiteralPath $artifact -Algorithm SHA256).Hash.ToLowerInvariant()
+    # Get-FileHash is a module script function and may not auto-load when
+    # Windows PowerShell inherits PSModulePath from PowerShell 7/Codex.
+    $artifactStream = [IO.File]::OpenRead($artifact)
+    $artifactSha = [Security.Cryptography.SHA256]::Create()
+    try { $hash = ([BitConverter]::ToString($artifactSha.ComputeHash($artifactStream))).Replace('-','').ToLowerInvariant() }
+    finally { $artifactSha.Dispose(); $artifactStream.Dispose() }
     [IO.File]::WriteAllText("$artifact.sha256","$hash  $([IO.Path]::GetFileName($artifact))"+[Environment]::NewLine,$utf8)
     $metadata = @{schemaVersion=1;generatorVersion=$export.generatorVersion;bundleName=$export.bundleName;mode=$export.mode;signed=$signed;hapSha256=$hash;buildTimeUtc=[DateTime]::UtcNow.ToString('o')}
     [IO.File]::WriteAllText("$artifact.release.json",($metadata|ConvertTo-Json),$utf8)
@@ -172,4 +207,5 @@ try {
     foreach ($name in $previousEnvironment.Keys) {
         [Environment]::SetEnvironmentVariable($name,$previousEnvironment[$name],'Process')
     }
+    $storePassword=$null;$keyPassword=$null;$secretValues=@()
 }

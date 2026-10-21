@@ -1,5 +1,5 @@
 export class AppConfig {
-  static readonly name: string = {{APP_NAME}};
+  static readonly appName: string = {{APP_NAME}};
   static readonly bundleName: string = {{BUNDLE_NAME}};
   static readonly version: string = {{VERSION_NAME}};
   static readonly runtimeVersion: string = '1';

@@ -1,20 +1,22 @@
 # CI 与真机测试
 
-本项目采用 Windows 工具本地开发、GitHub Actions 编译鸿蒙 HAP、Mate 80 Pro 真机验证的流程。
+本项目支持本地直接编译 HAP，再用 Mate 80 Pro 真机验证；GitHub Actions 保留用于自动验证与发布。本地构建不需要先配置 CI，见 [LOCAL-BUILD.md](LOCAL-BUILD.md)。
 
 ## 一次性配置
 
-从华为官方下载与模板基线配套的 Command Line Tools（开发态 modelVersion 6.0.0、目标 6.0.0(20)、JDK 17）。请确认该版本在提供的 SDK 中可用。HarmonyOS 7.0 是手机系统版本，不能直接作为 SDK API Level。
+使用已核对的 Windows Command Line Tools 26.0.0.851（modelVersion 26.0.0、SDK API 26、JDK 21）。最低兼容版本保留 6.0.0(20)，目标为 26.0.0。HarmonyOS 7.0 是手机系统版本，不能直接作为 SDK API Level。
 
 在 GitHub 仓库 Settings → Secrets and variables → Actions → Variables 添加：
 
 | Variable | 内容 |
 | --- | --- |
-| HARMONY_CLT_URL | 配套 Windows x64 官方工具链 ZIP 的 HTTPS 地址 |
-| HARMONY_CLT_SHA256 | 官方页面提供的 ZIP SHA-256，64 位十六进制 |
+| HARMONY_CLT_URL | 配套 Windows x64 官方工具链 ZIP 的 HTTPS 地址；带签名参数时应放在同名 Secret，不放公开配置 |
+| HARMONY_CLT_SHA256 | 可留空使用 toolchain.lock.json；填写时必须与锁定值一致 |
 | HARMONY_SDK_LICENSE_ACCEPTED | 阅读并接受对应华为许可后设为 true |
 
-这里不填写未经验证的下载地址。首次 CI 必须配置以上变量，缺失会明确失败，不能把工程导出成功当作 HAP 编译成功。每次使用缓存仍校验压缩包 SHA-256。工具链只在构建环境使用，不装进公开发行包。
+已核验的 ZIP SHA-256：`ac8d0563f47f95ca78799ea4aa494fa260bc3f7c8f2a569ac629af1794b5d71c`。
+
+这里不填写未经验证的下载地址。首次 CI 必须配置下载 URL 与许可确认，缺失会明确失败，不能把工程导出成功当作 HAP 编译成功。官网下载链接可能带时效签名，不能承诺长期有效；失效时需在官网下载新的合法地址，更新 Secret。Secret 优先于同名 Variable。每次使用缓存仍校验压缩包 SHA-256。工具链只在构建环境使用，不装进公开发行包。
 
 ## 真机签名
 

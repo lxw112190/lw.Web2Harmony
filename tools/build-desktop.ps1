@@ -23,7 +23,10 @@ exit $LASTEXITCODE
 $ctest=[IO.Path]::Combine([IO.Path]::GetDirectoryName($cmake),'ctest.exe')
 $scriptBody=$scriptBody.Replace('@ROOT@',$root.Replace("'","''")).Replace('@BUILD@',$build.Replace("'","''")).Replace('@CMAKE@',$cmake.Replace("'","''")).Replace('@CTEST@',$ctest.Replace("'","''")).Replace('@CONFIG@',$Configuration)
 $encoded=[Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($scriptBody))
-$process=Start-Process -FilePath "$env:SystemRoot/System32/WindowsPowerShell/v1.0/powershell.exe" -ArgumentList @('-NoProfile','-EncodedCommand',$encoded) -WorkingDirectory $root -UseNewEnvironment -WindowStyle Hidden -Wait -PassThru -RedirectStandardOutput "$build/logs/desktop-build.out.log" -RedirectStandardError "$build/logs/desktop-build.err.log"
+$process=Start-Process -FilePath "$env:SystemRoot/System32/WindowsPowerShell/v1.0/powershell.exe" -ArgumentList @('-NoProfile','-EncodedCommand',$encoded) -WorkingDirectory $root -UseNewEnvironment -WindowStyle Hidden -PassThru -RedirectStandardOutput "$build/logs/desktop-build.out.log" -RedirectStandardError "$build/logs/desktop-build.err.log"
+# Wait for this build process only; Start-Process -Wait can also wait for
+# persistent COM descendants created by the GUI smoke test.
+$process.WaitForExit()
 Get-Content -LiteralPath "$build/logs/desktop-build.out.log"
 Get-Content -LiteralPath "$build/logs/desktop-build.err.log"
 exit $process.ExitCode

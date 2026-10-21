@@ -55,7 +55,10 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force build/desktop-stage/bin | Out-Null
           Copy-Item build/Release/lw.Web2Harmony*.exe build/desktop-stage/bin
-          Copy-Item assets,runtime-template,samples,tools,docs,third_party build/desktop-stage -Recurse
+          Copy-Item assets,samples,tools,docs,third_party build/desktop-stage -Recurse
+          ./tools/copy-runtime-source.ps1 -Destination build/desktop-stage/runtime
+          New-Item -ItemType Directory -Force build/desktop-stage/packer | Out-Null
+          Copy-Item packer/templates build/desktop-stage/packer/templates -Recurse
           Copy-Item README.md,README_EN.md,LICENSE,THIRD-PARTY-NOTICES.md,toolchain.lock.json build/desktop-stage
           Copy-Item build/generated build/desktop-stage -Recurse
       - uses: actions/upload-artifact@v4
@@ -69,7 +72,7 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 45
     env:
-      CLT_URL: ${{ vars.HARMONY_CLT_URL }}
+      CLT_URL: ${{ secrets.HARMONY_CLT_URL || vars.HARMONY_CLT_URL }}
       CLT_SHA256: ${{ vars.HARMONY_CLT_SHA256 }}
       LICENSE_ACCEPTED: ${{ vars.HARMONY_SDK_LICENSE_ACCEPTED }}
       STORE_PASSWORD: ${{ secrets.HARMONY_STORE_PASSWORD }}
@@ -88,17 +91,21 @@ jobs:
         shell: pwsh
         run: |
           if ($env:LICENSE_ACCEPTED -ne 'true') { throw 'Set HARMONY_SDK_LICENSE_ACCEPTED=true only after accepting the Huawei toolchain license. See docs/CI.md.' }
+          $lock=Get-Content -Raw toolchain.lock.json | ConvertFrom-Json
+          if (-not $env:CLT_SHA256) { $env:CLT_SHA256=$lock.commandLineToolsSha256 }
           if ($env:CLT_URL -notmatch '^https://' -or $env:CLT_SHA256 -notmatch '^[a-fA-F0-9]{64}$') {
             throw 'Configure HARMONY_CLT_URL and HARMONY_CLT_SHA256 from the matching official Command Line Tools download. HAP builds are required; project export alone is not a successful build.'
           }
+          if ($env:CLT_SHA256 -ne $lock.commandLineToolsSha256) { throw 'HARMONY_CLT_SHA256 does not match toolchain.lock.json' }
+          "CLT_SHA256=$($env:CLT_SHA256)" >> $env:GITHUB_ENV
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: '17'
+          java-version: '21'
       - uses: actions/cache@v4
         with:
           path: build/downloads/command-line-tools.zip
-          key: harmony-clt-windows-${{ vars.HARMONY_CLT_SHA256 }}
+          key: harmony-clt-windows-${{ env.CLT_SHA256 }}
       - name: Import SHA256-verified official toolchain
         shell: pwsh
         run: |
@@ -128,6 +135,7 @@ jobs:
       - name: Compile and inspect local and remote HAPs
         shell: pwsh
         run: |
+          ./tools/build-runtime.ps1 -JavaHome $env:JAVA_HOME -ToolchainDirectory toolchain/command-line-tools
           $arguments=@{
             ProjectDirectory='build/desktop/generated/hello'
             ToolchainDirectory='toolchain/command-line-tools'
@@ -140,7 +148,8 @@ jobs:
           }
           ./tools/build-hap.ps1 @arguments
           ./tools/build-hap.ps1 -ProjectDirectory build/desktop/generated/remote -ToolchainDirectory toolchain/command-line-tools -JavaHome $env:JAVA_HOME
-          New-Item -ItemType Directory -Force build/hap-results/local,build/hap-results/remote|Out-Null
+          New-Item -ItemType Directory -Force build/hap-results/local,build/hap-results/remote,build/hap-results/runtime|Out-Null
+          Copy-Item runtime/dist/* build/hap-results/runtime
           Copy-Item build/desktop/generated/hello/dist/* build/hap-results/local
           Copy-Item build/desktop/generated/remote/dist/* build/hap-results/remote
       - name: Remove signing materials
