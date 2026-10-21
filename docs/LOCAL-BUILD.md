@@ -4,6 +4,8 @@
 
 本机工程已迁移至 `E:\My-Code\lw.Web2Harmony`。迁移后需重新生成 CMake 缓存；原来的构建目录保存在 `build-before-move/`，新构建和样例在 `build/`。两个目录及工具链、日志均被 Git 忽略。
 
+PowerShell 兼容性：签名导入和 HAP 构建会先通过 `tools/initialize-powershell.ps1` 从当前引擎 `$PSHOME/Modules` 显式加载系统模块，避免 Actions/pwsh 的 PowerShell 7 模块路径被 Windows PowerShell 5.1 错用。只调整当前进程，不修改系统环境或关闭安全检查。CTest 包含正常凭据测试和故意污染模块路径的隔离回归测试。
+
 ## 准备工具
 
 在项目根目录打开 PowerShell。阅读并接受对应华为工具链许可后运行：

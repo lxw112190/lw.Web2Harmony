@@ -43,8 +43,12 @@ if(BUILD_TESTING)
   target_link_libraries(harmony_tests PRIVATE harmony_core)
   add_test(NAME project_generator COMMAND harmony_tests "${CMAKE_CURRENT_SOURCE_DIR}")
   add_test(NAME gui_smoke COMMAND lw.Web2Harmony.GUI --smoke-test)
-  add_test(NAME signing_credentials COMMAND powershell.exe -NoProfile -ExecutionPolicy Bypass
+  find_program(LW_WINDOWS_POWERSHELL NAMES powershell.exe
+    PATHS "$ENV{SystemRoot}/System32/WindowsPowerShell/v1.0" NO_DEFAULT_PATH REQUIRED)
+  add_test(NAME signing_credentials COMMAND "${LW_WINDOWS_POWERSHELL}" -NoProfile -ExecutionPolicy Bypass
     -File "${CMAKE_CURRENT_SOURCE_DIR}/tests/SigningTests.ps1" -RepositoryRoot "${CMAKE_CURRENT_SOURCE_DIR}")
+  add_test(NAME signing_module_path_isolation COMMAND "${LW_WINDOWS_POWERSHELL}" -NoProfile -ExecutionPolicy Bypass
+    -File "${CMAKE_CURRENT_SOURCE_DIR}/tests/SigningTests.ps1" -RepositoryRoot "${CMAKE_CURRENT_SOURCE_DIR}" -PoisonModulePath)
   set_tests_properties(gui_smoke PROPERTIES WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
 endif()
 if(MSVC)

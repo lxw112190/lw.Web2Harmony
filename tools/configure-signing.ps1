@@ -6,6 +6,7 @@ param(
     [Parameter(Mandatory=$true)][string]$Profile,
     [Parameter(Mandatory=$true)][string]$KeyAlias
 )
+. ([IO.Path]::Combine($PSScriptRoot,'initialize-powershell.ps1'))
 $ErrorActionPreference='Stop'
 if($env:OS -ne 'Windows_NT'){throw 'Windows DPAPI is required for local credential storage'}
 $root=Split-Path -Parent $PSScriptRoot

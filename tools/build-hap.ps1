@@ -5,6 +5,7 @@ param(
     [Parameter(Mandatory=$true)][string]$JavaHome,
     [string]$SigningConfiguration
 )
+. ([IO.Path]::Combine($PSScriptRoot,'initialize-powershell.ps1'))
 $ErrorActionPreference = 'Stop'
 # Native GUI/CLI capture UTF-8, including Windows PowerShell 5.1 diagnostics.
 [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
